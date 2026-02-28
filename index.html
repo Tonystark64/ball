@@ -36,6 +36,7 @@
       box-shadow: 0 0 30px #00eaff66;
       display: block;
       background: #0d0d2b;
+      cursor: none;
     }
     #controls {
       margin-top: 14px;
@@ -45,19 +46,20 @@
       line-height: 1.8;
     }
     #controls b { color: #fff; }
-    #overlay {
+    .overlay {
       position: fixed;
       inset: 0;
-      background: #0a0a1acc;
+      background: rgba(10,10,26,0.85);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       z-index: 10;
     }
-    #overlay h2 { font-size: 2.5rem; margin-bottom: 10px; text-shadow: 0 0 20px #ff4466; }
-    #overlay p  { font-size: 1.1rem; color: #ccc; margin-bottom: 24px; }
-    #overlay button {
+    .overlay h2 { font-size: 2.5rem; margin-bottom: 10px; }
+    .overlay p  { font-size: 1.1rem; color: #ccc; margin-bottom: 8px; }
+    .overlay small { font-size: 0.9rem; color: #888; margin-bottom: 24px; display: block; }
+    .btn {
       padding: 12px 36px;
       font-size: 1.1rem;
       border: none;
@@ -68,8 +70,12 @@
       box-shadow: 0 0 20px #00eaff88;
       transition: transform .1s;
     }
-    #overlay button:hover { transform: scale(1.06); }
-    #startOverlay h2 { text-shadow: 0 0 20px #00eaff; color: #00eaff; }
+    .btn:hover { transform: scale(1.06); }
+    .btn-yellow {
+      background: linear-gradient(135deg, #ffe066, #ff8800);
+      color: #000;
+      box-shadow: 0 0 20px #ff880088;
+    }
   </style>
 </head>
 <body>
@@ -86,63 +92,69 @@
   </div>
 
   <!-- 开始界面 -->
-  <div id="startOverlay" class="overlay-panel" style="position:fixed;inset:0;background:#0a0a1acc;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;">
-    <h2 style="font-size:2.5rem;margin-bottom:10px;text-shadow:0 0 20px #00eaff;color:#00eaff;">🎱 弹珠小游戏</h2>
-    <p style="font-size:1.1rem;color:#ccc;margin-bottom:8px;">击碎所有砖块，不要让球掉落！</p>
-    <p style="font-size:0.9rem;color:#888;margin-bottom:24px;">← → 或鼠标移动挡板 | 空格键发射</p>
-    <button onclick="startGame()">开始游戏</button>
+  <div id="startOverlay" class="overlay">
+    <h2 style="color:#00eaff;text-shadow:0 0 20px #00eaff;">🎱 弹珠小游戏</h2>
+    <p>击碎所有砖块，不要让球掉落！</p>
+    <small>← → 或鼠标移动挡板 &nbsp;|&nbsp; 空格键发射</small>
+    <button class="btn" id="startBtn">开始游戏</button>
   </div>
 
   <script>
     const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+    const ctx    = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
 
-    // ── 游戏状态 ──────────────────────────────────────────
-    let score = 0, bestScore = parseInt(localStorage.getItem('ballBest') || '0');
+    // ─── 状态 ────────────────────────────────────────────
+    let score = 0;
+    let bestScore = parseInt(localStorage.getItem('ballBest') || '0');
     let lives = 3, level = 1;
-    let gameState = 'idle'; // idle | playing | paused | over | win
-    let animId = null;
+    // 'idle' | 'playing' | 'paused' | 'over'
+    let gameState = 'idle';
+    let animId    = null;
+    let running   = false; // 防止重复注册循环
 
-    // ── 挡板 ──────────────────────────────────────────────
-    const paddle = { w: 90, h: 12, x: 0, y: H - 30, speed: 7, color: '#00eaff' };
-    paddle.x = W / 2 - paddle.w / 2;
+    // ─── 挡板 ────────────────────────────────────────────
+    const paddle = { w: 90, h: 12, x: 195, y: H - 30, speed: 7 };
 
-    // ── 球 ────────────────────────────────────────────────
-    const ball = { r: 9, x: 0, y: 0, vx: 0, vy: 0, attached: true, color: '#ffe066', trail: [] };
+    // ─── 球 ──────────────────────────────────────────────
+    const ball = { r: 9, x: 0, y: 0, vx: 0, vy: 0, attached: true, trail: [] };
+
     function resetBall() {
       ball.x = paddle.x + paddle.w / 2;
       ball.y = paddle.y - ball.r - 1;
       const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
-      const spd = 4 + level * 0.4;
+      const spd   = 4 + level * 0.4;
       ball.vx = Math.cos(angle) * spd;
       ball.vy = Math.sin(angle) * spd;
       ball.attached = true;
       ball.trail = [];
     }
 
-    // ── 砖块 ──────────────────────────────────────────────
+    // ─── 砖块 ────────────────────────────────────────────
     const COLS = 8, ROWS = 5;
     const BRICK_W = 50, BRICK_H = 18, BRICK_PAD = 6;
     const OFFSET_X = (W - (COLS * (BRICK_W + BRICK_PAD) - BRICK_PAD)) / 2;
     const OFFSET_Y = 55;
-    let bricks = [];
 
     const BRICK_COLORS = [
-      ['#ff4466','#ff2244'],['#ff8800','#cc6600'],['#ffee00','#ccaa00'],
-      ['#44ff88','#22cc55'],['#00ccff','#0088bb'],
+      ['#ff4466','#ff2244'],
+      ['#ff8800','#cc6600'],
+      ['#ffee00','#ccaa00'],
+      ['#44ff88','#22cc55'],
+      ['#00ccff','#0088bb'],
     ];
+
+    let bricks = [];
     function initBricks() {
       bricks = [];
       for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
-          const hp = level >= 3 && r < 2 ? 2 : 1; // 高关卡顶部砖块双血
+          const hp = (level >= 3 && r < 2) ? 2 : 1;
           bricks.push({
             x: OFFSET_X + c * (BRICK_W + BRICK_PAD),
             y: OFFSET_Y + r * (BRICK_H + BRICK_PAD),
             w: BRICK_W, h: BRICK_H,
             hp, maxHp: hp,
-            row: r,
             alive: true,
             color: BRICK_COLORS[r % BRICK_COLORS.length],
           });
@@ -150,62 +162,73 @@
       }
     }
 
-    // ── 粒子 ──────────────────────────────────────────────
+    // ─── 粒子 ────────────────────────────────────────────
     let particles = [];
     function spawnParticles(x, y, color) {
-      for (let i = 0; i < 14; i++) {
-        const a = Math.random() * Math.PI * 2;
+      for (let i = 0; i < 12; i++) {
+        const a   = Math.random() * Math.PI * 2;
         const spd = 1.5 + Math.random() * 3;
         particles.push({ x, y, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd, life: 1, color });
       }
     }
 
-    // ── 键盘 ──────────────────────────────────────────────
+    // ─── 键盘 ────────────────────────────────────────────
     const keys = {};
     document.addEventListener('keydown', e => {
       keys[e.code] = true;
       if (e.code === 'Space') {
         e.preventDefault();
         if (gameState === 'playing') {
-          if (ball.attached) launch();
-          else togglePause();
+          if (ball.attached) ball.attached = false;
+          else               togglePause();
         }
       }
     });
     document.addEventListener('keyup', e => { keys[e.code] = false; });
 
-    // ── 鼠标 ──────────────────────────────────────────────
+    // ─── 鼠标（节流：每帧只读一次 mouseX）────────────────
+    let mouseX = -1;
     canvas.addEventListener('mousemove', e => {
       const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      paddle.x = mx - paddle.w / 2;
-      clampPaddle();
+      mouseX = e.clientX - rect.left;
     });
     canvas.addEventListener('click', () => {
-      if (gameState === 'playing' && ball.attached) launch();
+      if (gameState === 'playing' && ball.attached) ball.attached = false;
     });
+
+    function applyMouse() {
+      if (mouseX < 0) return;
+      paddle.x = mouseX - paddle.w / 2;
+      clampPaddle();
+    }
 
     function clampPaddle() {
       paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
     }
 
-    function launch() {
-      ball.attached = false;
-    }
-
-    // ── 暂停 ──────────────────────────────────────────────
+    // ─── 暂停 ────────────────────────────────────────────
     function togglePause() {
       if (gameState === 'playing') {
         gameState = 'paused';
+        running   = false;
         cancelAnimationFrame(animId);
-        drawPauseScreen();
+        // 绘制暂停遮罩
+        ctx.fillStyle = 'rgba(10,10,26,0.7)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 36px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('⏸ 已暂停', W/2, H/2 - 20);
+        ctx.font = '18px Arial';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText('按空格键继续', W/2, H/2 + 20);
       } else if (gameState === 'paused') {
         gameState = 'playing';
-        loop();
+        startLoop();
       }
     }
 
-    // ── 分数 ──────────────────────────────────────────────
+    // ─── HUD ─────────────────────────────────────────────
     function addScore(pts) {
       score += pts;
       if (score > bestScore) {
@@ -216,34 +239,36 @@
     }
     function updateHUD() {
       document.getElementById('score').textContent = score;
-      document.getElementById('best').textContent = bestScore;
+      document.getElementById('best').textContent  = bestScore;
       document.getElementById('lives').textContent = lives;
       document.getElementById('level').textContent = level;
     }
 
-    // ── 碰撞 ──────────────────────────────────────────────
+    // ─── 碰撞 ────────────────────────────────────────────
     function rectBallCollide(rx, ry, rw, rh) {
-      const nearX = Math.max(rx, Math.min(ball.x, rx + rw));
-      const nearY = Math.max(ry, Math.min(ball.y, ry + rh));
-      const dx = ball.x - nearX, dy = ball.y - nearY;
-      return dx * dx + dy * dy <= ball.r * ball.r;
+      const nx = Math.max(rx, Math.min(ball.x, rx + rw));
+      const ny = Math.max(ry, Math.min(ball.y, ry + rh));
+      const dx = ball.x - nx, dy = ball.y - ny;
+      return dx*dx + dy*dy <= ball.r * ball.r;
     }
 
-    function resolveBrickCollision(b) {
+    function resolveBrick(b) {
       const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-      const overlapX = (b.w / 2 + ball.r) - Math.abs(ball.x - cx);
-      const overlapY = (b.h / 2 + ball.r) - Math.abs(ball.y - cy);
-      if (overlapX < overlapY) ball.vx = -ball.vx;
-      else ball.vy = -ball.vy;
+      const ox = (b.w/2 + ball.r) - Math.abs(ball.x - cx);
+      const oy = (b.h/2 + ball.r) - Math.abs(ball.y - cy);
+      if (ox < oy) ball.vx = -ball.vx;
+      else         ball.vy = -ball.vy;
     }
 
-    // ── 主更新 ────────────────────────────────────────────
+    // ─── 更新 ────────────────────────────────────────────
     function update() {
-      // 挡板键盘控制
+      // 鼠标应用（节流后每帧调用一次）
+      applyMouse();
+
+      // 键盘挡板
       if (keys['ArrowLeft'])  { paddle.x -= paddle.speed; clampPaddle(); }
       if (keys['ArrowRight']) { paddle.x += paddle.speed; clampPaddle(); }
 
-      // 球跟随挡板
       if (ball.attached) {
         ball.x = paddle.x + paddle.w / 2;
         ball.y = paddle.y - ball.r - 1;
@@ -252,15 +277,15 @@
 
       // 轨迹
       ball.trail.push({ x: ball.x, y: ball.y });
-      if (ball.trail.length > 10) ball.trail.shift();
+      if (ball.trail.length > 8) ball.trail.shift();
 
       ball.x += ball.vx;
       ball.y += ball.vy;
 
       // 墙壁
-      if (ball.x - ball.r < 0)  { ball.x = ball.r;     ball.vx = Math.abs(ball.vx); }
+      if (ball.x - ball.r < 0)  { ball.x = ball.r;     ball.vx =  Math.abs(ball.vx); }
       if (ball.x + ball.r > W)  { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
-      if (ball.y - ball.r < 0)  { ball.y = ball.r;     ball.vy = Math.abs(ball.vy); }
+      if (ball.y - ball.r < 0)  { ball.y = ball.r;     ball.vy =  Math.abs(ball.vy); }
 
       // 掉出底部
       if (ball.y - ball.r > H) {
@@ -274,10 +299,9 @@
       // 挡板碰撞
       if (ball.vy > 0 && rectBallCollide(paddle.x, paddle.y, paddle.w, paddle.h)) {
         ball.y = paddle.y - ball.r;
-        // 根据击打位置调整角度
-        const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+        const hit   = (ball.x - (paddle.x + paddle.w/2)) / (paddle.w/2);
         const angle = hit * (Math.PI / 3);
-        const spd = Math.hypot(ball.vx, ball.vy);
+        const spd   = Math.hypot(ball.vx, ball.vy);
         ball.vx = Math.sin(angle) * spd;
         ball.vy = -Math.abs(Math.cos(angle) * spd);
       }
@@ -288,7 +312,7 @@
         if (!b.alive) continue;
         remaining++;
         if (rectBallCollide(b.x, b.y, b.w, b.h)) {
-          resolveBrickCollision(b);
+          resolveBrick(b);
           b.hp--;
           if (b.hp <= 0) {
             b.alive = false;
@@ -302,47 +326,37 @@
         }
       }
 
-      // 通关检测
-      if (remaining === 0) { nextLevel(); }
+      if (remaining === 0) { nextLevel(); return; }
 
-      // 粒子
-      particles = particles.filter(p => p.life > 0);
-      for (const p of particles) {
-        p.x += p.vx; p.y += p.vy;
-        p.vy += 0.08;
-        p.life -= 0.03;
+      // 粒子更新
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.life -= 0.03;
+        if (p.life <= 0) particles.splice(i, 1);
       }
     }
 
-    // ── 绘制 ──────────────────────────────────────────────
+    // ─── 绘制 ────────────────────────────────────────────
     function draw() {
       ctx.clearRect(0, 0, W, H);
-
-      // 背景网格
-      ctx.strokeStyle = '#ffffff08';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
 
       // 砖块
       for (const b of bricks) {
         if (!b.alive) continue;
-        const alpha = b.hp === b.maxHp ? 1 : 0.55;
-        const grad = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
-        grad.addColorStop(0, b.color[0] + (alpha < 1 ? '88' : 'ff'));
-        grad.addColorStop(1, b.color[1] + (alpha < 1 ? '66' : 'cc'));
-        ctx.fillStyle = grad;
+        const dimmed = b.hp < b.maxHp;
+        ctx.globalAlpha = dimmed ? 0.55 : 1;
+        ctx.fillStyle   = b.color[0];
         ctx.beginPath();
         ctx.roundRect(b.x, b.y, b.w, b.h, 4);
         ctx.fill();
-        // 高亮边
+        ctx.globalAlpha = 1;
         ctx.strokeStyle = '#ffffff33';
-        ctx.lineWidth = 1;
+        ctx.lineWidth   = 1;
         ctx.stroke();
-        // 双血砖块显示裂纹
-        if (b.hp < b.maxHp) {
+        // 裂纹
+        if (dimmed) {
           ctx.strokeStyle = '#00000066';
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth   = 1.5;
           ctx.beginPath();
           ctx.moveTo(b.x + b.w*0.3, b.y + 2);
           ctx.lineTo(b.x + b.w*0.5, b.y + b.h - 2);
@@ -353,150 +367,139 @@
       // 轨迹
       for (let i = 0; i < ball.trail.length; i++) {
         const t = ball.trail[i];
-        const alpha = (i / ball.trail.length) * 0.35;
+        const a = (i / ball.trail.length) * 0.3;
         ctx.beginPath();
-        ctx.arc(t.x, t.y, ball.r * (i / ball.trail.length), 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255,224,102,${alpha})`;
+        ctx.arc(t.x, t.y, ball.r * (i / ball.trail.length) * 0.9, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(255,224,102,${a})`;
         ctx.fill();
       }
 
       // 球
-      const ballGrad = ctx.createRadialGradient(ball.x - ball.r*0.3, ball.y - ball.r*0.3, 1, ball.x, ball.y, ball.r);
-      ballGrad.addColorStop(0, '#fff8cc');
-      ballGrad.addColorStop(0.5, ball.color);
-      ballGrad.addColorStop(1, '#cc8800');
       ctx.beginPath();
-      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
-      ctx.fillStyle = ballGrad;
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+      ctx.fillStyle   = '#ffe066';
       ctx.fill();
       ctx.strokeStyle = '#ffffffaa';
-      ctx.lineWidth = 1;
+      ctx.lineWidth   = 1;
       ctx.stroke();
 
       // 挡板
-      const padGrad = ctx.createLinearGradient(paddle.x, paddle.y, paddle.x, paddle.y + paddle.h);
-      padGrad.addColorStop(0, '#00eaff');
-      padGrad.addColorStop(1, '#0055cc');
       ctx.beginPath();
       ctx.roundRect(paddle.x, paddle.y, paddle.w, paddle.h, 6);
-      ctx.fillStyle = padGrad;
+      ctx.fillStyle   = '#00eaff';
       ctx.fill();
       ctx.strokeStyle = '#ffffffaa';
-      ctx.lineWidth = 1;
+      ctx.lineWidth   = 1;
       ctx.stroke();
 
       // 粒子
       for (const p of particles) {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI * 2);
-        ctx.fillStyle = p.color + Math.floor(p.life * 255).toString(16).padStart(2,'0');
+        ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2);
+        ctx.fillStyle = p.color + Math.floor(p.life*255).toString(16).padStart(2,'0');
         ctx.fill();
       }
 
-      // 球附着提示
-      if (ball.attached) {
-        ctx.fillStyle = '#ffffff88';
-        ctx.font = '14px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('按空格键 / 点击 发射', W / 2, H - 10);
+      // 提示文字
+      if (ball.attached && gameState === 'playing') {
+        ctx.fillStyle   = '#ffffff88';
+        ctx.font        = '14px Arial';
+        ctx.textAlign   = 'center';
+        ctx.fillText('按空格 / 点击 发射', W/2, H - 10);
       }
     }
 
-    function drawPauseScreen() {
-      ctx.fillStyle = '#0a0a1aaa';
-      ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 36px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('⏸ 已暂停', W / 2, H / 2 - 20);
-      ctx.font = '18px Arial';
-      ctx.fillStyle = '#aaa';
-      ctx.fillText('按空格键继续', W / 2, H / 2 + 20);
-    }
-
-    // ── 关卡切换 ──────────────────────────────────────────
-    function nextLevel() {
-      level++;
-      gameState = 'idle';
-      cancelAnimationFrame(animId);
-      initBricks();
-      resetBall();
-      paddle.w = Math.max(60, 90 - (level - 1) * 5);
-      updateHUD();
-      showLevelOverlay();
-    }
-
-    function showLevelOverlay() {
-      const ov = document.createElement('div');
-      ov.id = 'levelOverlay';
-      ov.style.cssText = 'position:fixed;inset:0;background:#0a0a1acc;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;';
-      ov.innerHTML = `
-        <h2 style="font-size:2.5rem;color:#ffe066;text-shadow:0 0 20px #ff8800;margin-bottom:10px;">🎉 通关！</h2>
-        <p style="font-size:1.2rem;color:#ccc;margin-bottom:6px;">进入第 ${level} 关</p>
-        <p style="font-size:0.9rem;color:#888;margin-bottom:24px;">挡板变窄，球速加快！</p>
-        <button onclick="resumeLevel()" style="padding:12px 36px;font-size:1.1rem;border:none;border-radius:30px;background:linear-gradient(135deg,#ffe066,#ff8800);color:#000;cursor:pointer;box-shadow:0 0 20px #ff880088;">继续</button>
-      `;
-      document.body.appendChild(ov);
-    }
-
-    window.resumeLevel = function() {
-      const ov = document.getElementById('levelOverlay');
-      if (ov) ov.remove();
-      gameState = 'playing';
-      loop();
-    };
-
-    // ── 游戏结束 ──────────────────────────────────────────
-    function gameOver() {
-      gameState = 'over';
-      cancelAnimationFrame(animId);
-      const ov = document.createElement('div');
-      ov.style.cssText = 'position:fixed;inset:0;background:#0a0a1acc;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;';
-      ov.innerHTML = `
-        <h2 style="font-size:2.5rem;color:#ff4466;text-shadow:0 0 20px #ff4466;margin-bottom:10px;">💥 游戏结束</h2>
-        <p style="font-size:1.2rem;color:#ccc;margin-bottom:6px;">最终得分：<b style="color:#ffe066">${score}</b></p>
-        <p style="font-size:1rem;color:#aaa;margin-bottom:24px;">最高分：<b style="color:#00eaff">${bestScore}</b></p>
-        <button onclick="restartGame()" style="padding:12px 36px;font-size:1.1rem;border:none;border-radius:30px;background:linear-gradient(135deg,#00eaff,#0055ff);color:#fff;cursor:pointer;box-shadow:0 0 20px #00eaff88;">再来一次</button>
-      `;
-      document.body.appendChild(ov);
-    }
-
-    window.restartGame = function() {
-      document.querySelectorAll('[style*="position:fixed"]').forEach(el => {
-        if (el.id !== 'startOverlay') el.remove();
-      });
-      score = 0; lives = 3; level = 1;
-      paddle.w = 90;
-      initBricks();
-      resetBall();
-      updateHUD();
-      gameState = 'playing';
-      loop();
-    };
-
-    window.startGame = function() {
-      document.getElementById('startOverlay').remove();
-      score = 0; lives = 3; level = 1;
-      paddle.w = 90;
-      initBricks();
-      resetBall();
-      updateHUD();
-      gameState = 'playing';
-      loop();
-    };
-
-    // ── 游戏循环 ──────────────────────────────────────────
+    // ─── 游戏循环（单一入口）────────────────────────────
     function loop() {
+      if (!running) return;
       update();
       draw();
       animId = requestAnimationFrame(loop);
     }
 
-    // ── 初始化渲染 ────────────────────────────────────────
+    function startLoop() {
+      if (running) return; // 防重复
+      running = true;
+      animId  = requestAnimationFrame(loop);
+    }
+
+    function stopLoop() {
+      running = false;
+      cancelAnimationFrame(animId);
+    }
+
+    // ─── 关卡 ────────────────────────────────────────────
+    function nextLevel() {
+      stopLoop();
+      level++;
+      paddle.w = Math.max(60, 90 - (level - 1) * 5);
+      initBricks();
+      resetBall();
+      updateHUD();
+      showOverlay(
+        `🎉 第 ${level - 1} 关通过！`,
+        `准备进入第 <b style="color:#ffe066">${level}</b> 关`,
+        '挡板变窄，球速加快',
+        '继续',
+        'btn btn-yellow',
+        () => { gameState = 'playing'; startLoop(); }
+      );
+    }
+
+    // ─── 游戏结束 ────────────────────────────────────────
+    function gameOver() {
+      stopLoop();
+      gameState = 'over';
+      showOverlay(
+        '💥 游戏结束',
+        `得分：<b style="color:#ffe066">${score}</b>`,
+        `最高分：<b style="color:#00eaff">${bestScore}</b>`,
+        '再来一次',
+        'btn',
+        () => {
+          score = 0; lives = 3; level = 1;
+          paddle.w = 90;
+          particles = [];
+          initBricks(); resetBall(); updateHUD();
+          gameState = 'playing'; startLoop();
+        }
+      );
+    }
+
+    // ─── 通用 overlay ────────────────────────────────────
+    function showOverlay(title, line1, line2, btnText, btnClass, onConfirm) {
+      // 移除旧 overlay
+      document.querySelectorAll('.dyn-overlay').forEach(el => el.remove());
+      const ov = document.createElement('div');
+      ov.className = 'overlay dyn-overlay';
+      ov.innerHTML = `
+        <h2>${title}</h2>
+        <p>${line1}</p>
+        <small>${line2}</small>
+        <button class="${btnClass}">${btnText}</button>
+      `;
+      ov.querySelector('button').addEventListener('click', () => {
+        ov.remove();
+        onConfirm();
+      });
+      document.body.appendChild(ov);
+    }
+
+    // ─── 初始化 ──────────────────────────────────────────
     updateHUD();
     initBricks();
     resetBall();
     draw();
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      document.getElementById('startOverlay').remove();
+      score = 0; lives = 3; level = 1;
+      paddle.w = 90;
+      particles = [];
+      initBricks(); resetBall(); updateHUD();
+      gameState = 'playing';
+      startLoop();
+    });
   </script>
 </body>
 </html>
