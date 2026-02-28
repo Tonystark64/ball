@@ -49,7 +49,7 @@
     .overlay {
       position: fixed;
       inset: 0;
-      background: rgba(10,10,26,0.85);
+      background: rgba(10,10,26,0.88);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -104,44 +104,46 @@
     const ctx    = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
 
-    // ─── 状态 ────────────────────────────────────────────
+    // ─── 状态枚举 ─────────────────────────────────────────
+    // IDLE: 未开始  READY: 已开始但球贴着挡板  PLAYING: 球在飞  PAUSED: 暂停  OVER: 结束
+    const STATE = { IDLE:'idle', READY:'ready', PLAYING:'playing', PAUSED:'paused', OVER:'over' };
+    let state = STATE.IDLE;
+    let animId = null;
+
+    // ─── 分数 ──────────────────────────────────────────────
     let score = 0;
     let bestScore = parseInt(localStorage.getItem('ballBest') || '0');
     let lives = 3, level = 1;
-    // 'idle' | 'playing' | 'paused' | 'over'
-    let gameState = 'idle';
-    let animId    = null;
-    let running   = false; // 防止重复注册循环
 
-    // ─── 挡板 ────────────────────────────────────────────
+    // ─── 挡板 ─────────────────────────────────────────────
     const paddle = { w: 90, h: 12, x: 195, y: H - 30, speed: 7 };
 
-    // ─── 球 ──────────────────────────────────────────────
-    const ball = { r: 9, x: 0, y: 0, vx: 0, vy: 0, attached: true, trail: [] };
+    // ─── 球 ───────────────────────────────────────────────
+    const ball = { r: 9, x: 0, y: 0, vx: 0, vy: 0, trail: [] };
 
     function resetBall() {
       ball.x = paddle.x + paddle.w / 2;
       ball.y = paddle.y - ball.r - 1;
+      ball.vx = 0;
+      ball.vy = 0;
+      ball.trail = [];
+    }
+
+    function launchBall() {
       const angle = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
       const spd   = 4 + level * 0.4;
       ball.vx = Math.cos(angle) * spd;
       ball.vy = Math.sin(angle) * spd;
-      ball.attached = true;
-      ball.trail = [];
     }
 
-    // ─── 砖块 ────────────────────────────────────────────
+    // ─── 砖块 ─────────────────────────────────────────────
     const COLS = 8, ROWS = 5;
     const BRICK_W = 50, BRICK_H = 18, BRICK_PAD = 6;
     const OFFSET_X = (W - (COLS * (BRICK_W + BRICK_PAD) - BRICK_PAD)) / 2;
     const OFFSET_Y = 55;
 
     const BRICK_COLORS = [
-      ['#ff4466','#ff2244'],
-      ['#ff8800','#cc6600'],
-      ['#ffee00','#ccaa00'],
-      ['#44ff88','#22cc55'],
-      ['#00ccff','#0088bb'],
+      '#ff4466', '#ff8800', '#ffee00', '#44ff88', '#00ccff',
     ];
 
     let bricks = [];
@@ -162,38 +164,56 @@
       }
     }
 
-    // ─── 粒子 ────────────────────────────────────────────
+    // ─── 粒子 ─────────────────────────────────────────────
     let particles = [];
     function spawnParticles(x, y, color) {
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 10; i++) {
         const a   = Math.random() * Math.PI * 2;
         const spd = 1.5 + Math.random() * 3;
         particles.push({ x, y, vx: Math.cos(a)*spd, vy: Math.sin(a)*spd, life: 1, color });
       }
     }
 
-    // ─── 键盘 ────────────────────────────────────────────
+    // ─── 键盘 ─────────────────────────────────────────────
     const keys = {};
     document.addEventListener('keydown', e => {
-      keys[e.code] = true;
       if (e.code === 'Space') {
         e.preventDefault();
-        if (gameState === 'playing') {
-          if (ball.attached) ball.attached = false;
-          else               togglePause();
-        }
+        handleSpace();
+        return;
       }
+      keys[e.code] = true;
     });
-    document.addEventListener('keyup', e => { keys[e.code] = false; });
+    document.addEventListener('keyup', e => {
+      keys[e.code] = false;
+    });
 
-    // ─── 鼠标（节流：每帧只读一次 mouseX）────────────────
+    function handleSpace() {
+      if (state === STATE.READY) {
+        // 发射球
+        launchBall();
+        state = STATE.PLAYING;
+      } else if (state === STATE.PLAYING) {
+        // 暂停
+        state = STATE.PAUSED;
+      } else if (state === STATE.PAUSED) {
+        // 恢复
+        state = STATE.PLAYING;
+      }
+      // IDLE / OVER 状态下空格无效（由按钮控制）
+    }
+
+    // ─── 鼠标 ─────────────────────────────────────────────
     let mouseX = -1;
     canvas.addEventListener('mousemove', e => {
       const rect = canvas.getBoundingClientRect();
       mouseX = e.clientX - rect.left;
     });
     canvas.addEventListener('click', () => {
-      if (gameState === 'playing' && ball.attached) ball.attached = false;
+      if (state === STATE.READY) {
+        launchBall();
+        state = STATE.PLAYING;
+      }
     });
 
     function applyMouse() {
@@ -206,29 +226,7 @@
       paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
     }
 
-    // ─── 暂停 ────────────────────────────────────────────
-    function togglePause() {
-      if (gameState === 'playing') {
-        gameState = 'paused';
-        running   = false;
-        cancelAnimationFrame(animId);
-        // 绘制暂停遮罩
-        ctx.fillStyle = 'rgba(10,10,26,0.7)';
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 36px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('⏸ 已暂停', W/2, H/2 - 20);
-        ctx.font = '18px Arial';
-        ctx.fillStyle = '#aaa';
-        ctx.fillText('按空格键继续', W/2, H/2 + 20);
-      } else if (gameState === 'paused') {
-        gameState = 'playing';
-        startLoop();
-      }
-    }
-
-    // ─── HUD ─────────────────────────────────────────────
+    // ─── HUD ──────────────────────────────────────────────
     function addScore(pts) {
       score += pts;
       if (score > bestScore) {
@@ -244,7 +242,7 @@
       document.getElementById('level').textContent = level;
     }
 
-    // ─── 碰撞 ────────────────────────────────────────────
+    // ─── 碰撞检测 ─────────────────────────────────────────
     function rectBallCollide(rx, ry, rw, rh) {
       const nx = Math.max(rx, Math.min(ball.x, rx + rw));
       const ny = Math.max(ry, Math.min(ball.y, ry + rh));
@@ -260,20 +258,22 @@
       else         ball.vy = -ball.vy;
     }
 
-    // ─── 更新 ────────────────────────────────────────────
+    // ─── Update（只在 READY/PLAYING 时调用）───────────────
     function update() {
-      // 鼠标应用（节流后每帧调用一次）
+      // 挡板控制（READY 和 PLAYING 都可以移动）
       applyMouse();
-
-      // 键盘挡板
       if (keys['ArrowLeft'])  { paddle.x -= paddle.speed; clampPaddle(); }
       if (keys['ArrowRight']) { paddle.x += paddle.speed; clampPaddle(); }
 
-      if (ball.attached) {
+      // READY：球贴着挡板跟随移动
+      if (state === STATE.READY) {
         ball.x = paddle.x + paddle.w / 2;
         ball.y = paddle.y - ball.r - 1;
         return;
       }
+
+      // PLAYING：物理更新
+      if (state !== STATE.PLAYING) return;
 
       // 轨迹
       ball.trail.push({ x: ball.x, y: ball.y });
@@ -282,7 +282,7 @@
       ball.x += ball.vx;
       ball.y += ball.vy;
 
-      // 墙壁
+      // 墙壁反弹
       if (ball.x - ball.r < 0)  { ball.x = ball.r;     ball.vx =  Math.abs(ball.vx); }
       if (ball.x + ball.r > W)  { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx); }
       if (ball.y - ball.r < 0)  { ball.y = ball.r;     ball.vy =  Math.abs(ball.vy); }
@@ -291,8 +291,12 @@
       if (ball.y - ball.r > H) {
         lives--;
         updateHUD();
-        if (lives <= 0) { gameOver(); return; }
+        if (lives <= 0) {
+          doGameOver();
+          return;
+        }
         resetBall();
+        state = STATE.READY;
         return;
       }
 
@@ -317,7 +321,7 @@
           if (b.hp <= 0) {
             b.alive = false;
             remaining--;
-            spawnParticles(b.x + b.w/2, b.y + b.h/2, b.color[0]);
+            spawnParticles(b.x + b.w/2, b.y + b.h/2, b.color);
             addScore(10 * level);
           } else {
             addScore(5);
@@ -326,9 +330,12 @@
         }
       }
 
-      if (remaining === 0) { nextLevel(); return; }
+      if (remaining === 0) {
+        doNextLevel();
+        return;
+      }
 
-      // 粒子更新
+      // 粒子
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
         p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.life -= 0.03;
@@ -336,16 +343,15 @@
       }
     }
 
-    // ─── 绘制 ────────────────────────────────────────────
+    // ─── Draw ─────────────────────────────────────────────
     function draw() {
       ctx.clearRect(0, 0, W, H);
 
       // 砖块
       for (const b of bricks) {
         if (!b.alive) continue;
-        const dimmed = b.hp < b.maxHp;
-        ctx.globalAlpha = dimmed ? 0.55 : 1;
-        ctx.fillStyle   = b.color[0];
+        ctx.globalAlpha = (b.hp < b.maxHp) ? 0.5 : 1;
+        ctx.fillStyle   = b.color;
         ctx.beginPath();
         ctx.roundRect(b.x, b.y, b.w, b.h, 4);
         ctx.fill();
@@ -353,9 +359,8 @@
         ctx.strokeStyle = '#ffffff33';
         ctx.lineWidth   = 1;
         ctx.stroke();
-        // 裂纹
-        if (dimmed) {
-          ctx.strokeStyle = '#00000066';
+        if (b.hp < b.maxHp) {
+          ctx.strokeStyle = '#00000077';
           ctx.lineWidth   = 1.5;
           ctx.beginPath();
           ctx.moveTo(b.x + b.w*0.3, b.y + 2);
@@ -367,9 +372,9 @@
       // 轨迹
       for (let i = 0; i < ball.trail.length; i++) {
         const t = ball.trail[i];
-        const a = (i / ball.trail.length) * 0.3;
+        const a = (i / ball.trail.length) * 0.25;
         ctx.beginPath();
-        ctx.arc(t.x, t.y, ball.r * (i / ball.trail.length) * 0.9, 0, Math.PI*2);
+        ctx.arc(t.x, t.y, ball.r * (i / ball.trail.length) * 0.8, 0, Math.PI*2);
         ctx.fillStyle = `rgba(255,224,102,${a})`;
         ctx.fill();
       }
@@ -396,45 +401,61 @@
       for (const p of particles) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2);
-        ctx.fillStyle = p.color + Math.floor(p.life*255).toString(16).padStart(2,'0');
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle   = p.color;
         ctx.fill();
+        ctx.globalAlpha = 1;
       }
 
       // 提示文字
-      if (ball.attached && gameState === 'playing') {
-        ctx.fillStyle   = '#ffffff88';
+      if (state === STATE.READY) {
+        ctx.fillStyle   = '#ffffffaa';
         ctx.font        = '14px Arial';
         ctx.textAlign   = 'center';
-        ctx.fillText('按空格 / 点击 发射', W/2, H - 10);
+        ctx.fillText('按空格 / 点击发射', W/2, H - 10);
+      }
+
+      // 暂停遮罩（直接在画布上绘制，不用 DOM）
+      if (state === STATE.PAUSED) {
+        ctx.fillStyle = 'rgba(10,10,26,0.72)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle   = '#fff';
+        ctx.font        = 'bold 36px Arial';
+        ctx.textAlign   = 'center';
+        ctx.fillText('⏸ 已暂停', W/2, H/2 - 20);
+        ctx.font        = '18px Arial';
+        ctx.fillStyle   = '#aaa';
+        ctx.fillText('按空格键继续', W/2, H/2 + 20);
       }
     }
 
-    // ─── 游戏循环（单一入口）────────────────────────────
+    // ─── 游戏循环 ─────────────────────────────────────────
     function loop() {
-      if (!running) return;
       update();
       draw();
       animId = requestAnimationFrame(loop);
     }
 
     function startLoop() {
-      if (running) return; // 防重复
-      running = true;
-      animId  = requestAnimationFrame(loop);
+      if (animId !== null) cancelAnimationFrame(animId);
+      animId = requestAnimationFrame(loop);
     }
 
     function stopLoop() {
-      running = false;
-      cancelAnimationFrame(animId);
+      if (animId !== null) {
+        cancelAnimationFrame(animId);
+        animId = null;
+      }
     }
 
-    // ─── 关卡 ────────────────────────────────────────────
-    function nextLevel() {
-      stopLoop();
+    // ─── 关卡切换（用 overlay 提示，循环继续跑）──────────
+    function doNextLevel() {
+      // 切换到 READY，循环不停，让挡板仍可控制
       level++;
       paddle.w = Math.max(60, 90 - (level - 1) * 5);
       initBricks();
       resetBall();
+      state = STATE.READY;
       updateHUD();
       showOverlay(
         `🎉 第 ${level - 1} 关通过！`,
@@ -442,14 +463,14 @@
         '挡板变窄，球速加快',
         '继续',
         'btn btn-yellow',
-        () => { gameState = 'playing'; startLoop(); }
+        () => { /* overlay 关闭即可，state 已是 READY */ }
       );
     }
 
-    // ─── 游戏结束 ────────────────────────────────────────
-    function gameOver() {
-      stopLoop();
-      gameState = 'over';
+    // ─── 游戏结束 ─────────────────────────────────────────
+    function doGameOver() {
+      state = STATE.OVER;
+      updateHUD();
       showOverlay(
         '💥 游戏结束',
         `得分：<b style="color:#ffe066">${score}</b>`,
@@ -460,15 +481,16 @@
           score = 0; lives = 3; level = 1;
           paddle.w = 90;
           particles = [];
-          initBricks(); resetBall(); updateHUD();
-          gameState = 'playing'; startLoop();
+          initBricks();
+          resetBall();
+          updateHUD();
+          state = STATE.READY;
         }
       );
     }
 
-    // ─── 通用 overlay ────────────────────────────────────
+    // ─── 通用 Overlay ─────────────────────────────────────
     function showOverlay(title, line1, line2, btnText, btnClass, onConfirm) {
-      // 移除旧 overlay
       document.querySelectorAll('.dyn-overlay').forEach(el => el.remove());
       const ov = document.createElement('div');
       ov.className = 'overlay dyn-overlay';
@@ -485,7 +507,7 @@
       document.body.appendChild(ov);
     }
 
-    // ─── 初始化 ──────────────────────────────────────────
+    // ─── 初始化 ───────────────────────────────────────────
     updateHUD();
     initBricks();
     resetBall();
@@ -496,8 +518,10 @@
       score = 0; lives = 3; level = 1;
       paddle.w = 90;
       particles = [];
-      initBricks(); resetBall(); updateHUD();
-      gameState = 'playing';
+      initBricks();
+      resetBall();
+      updateHUD();
+      state = STATE.READY;
       startLoop();
     });
   </script>
